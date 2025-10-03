@@ -19,6 +19,7 @@
 //  1.4
 //  - Rewrite encoder library
 //  - Added Menu Main for select functions
+//  - Added Battery Load mode
 
 #include <Arduino.h>
 #include <Adafruit_ADS1X15.h>
@@ -30,6 +31,7 @@
 #include <Encoder.h>
 #include <FanControl.h>
 
+#define UPDATE_CAPACITY         1000
 #define UPDATE_VALUES           350
 #define STATUS_INTERVAL         3000
 #define VOLTAGE_MAX_LIMIT       99
@@ -106,24 +108,25 @@ void CaptureButtonDownStates(void);
 DateTime currentTime;
 DateTime startTime;
 TimeSpan ts;
-float voltage = 0.0f, current = 0.0f, temp1 = 0.0f, temp2 = 0.0f, averageTemp = 0.0f;
+float voltage = 0.0f, current = 0.0f, capacity = 0.0f, temp1 = 0.0f, temp2 = 0.0f, averageTemp = 0.0f, offVoltage = 0.0f;
 uint8_t fanPercentPower = 0;
-uint16_t power = 0, capacity = 0, fanSetPwm = 0, fanCurrentPwm = 0;
+uint16_t power = 0, fanSetPwm = 0, fanCurrentPwm = 0, actualCapacity = 0;
 int encPos = 1, currMenuPos = 1;
-char timeBuffer[9], timeElapsedBuffer[9], voltageBuffer[8], currentBuffer[8], powerBuffer[8];
+char timeBuffer[9], timeElapsedBuffer[9], voltageBuffer[8], currentBuffer[8], powerBuffer[8], capacityBuffer[10] = "    0mAh", offVoltageBuffer[8];
 
 bool enableBtnClick = false, encBtnClick = false, enableBtnLongPress = false, encBtnLongPress = false;
 bool updateValues = true, disableOutputState = true, updateMenu = true;
 
-unsigned long updateTime = 0, fanPwmChangeMillis = 0, statusMillis = 0;
+unsigned long updateTime = 0, fanPwmChangeMillis = 0, statusMillis = 0, updateTimeCapacity = 0;
 
 void GetVoltage(char* buffer);
 void GetCurrent(char* buffer);
 void GetPower(char* buffer);
+void GetCapacity(char* buffer);
+void GetOffVoltage(char* buffer);
 String GetAverageTemp();
 String GetTime();
 String ElapsedTime();
-String GetCapacity();
 
 void DisableOutput(bool en);
 void FanControl(void);
@@ -136,7 +139,7 @@ void EncButtonClick(void);
 void EnableButtonLongPress(void);
 void EncButtonLongPress(void);
 void ControlLoop(void);
-void EncoderLoop(void);
+void EncoderLoop(bool values);
 void CheckLimits(void);
 uint16_t mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
 
@@ -196,7 +199,7 @@ void Menu_Main()
   while (1)
   {
     ControlLoop();
-    EncoderLoop();
+    EncoderLoop(false);
 
     if(currMenuPos != encPos)
     {
@@ -269,6 +272,7 @@ void Menu_Main()
 void Menu_Load()
 {
   lcd.clear();
+  encoder.encoderPos = 1;
 
   while (1)
   {
@@ -279,7 +283,6 @@ void Menu_Load()
     }
 
     ControlLoop();
-    //EncoderLoop();
     FanControl();
 
     if(enableBtnClick)
@@ -345,9 +348,18 @@ void Menu_Load()
 void Menu_Baterry()
 {
   lcd.clear();
+  encoder.encoderPos = 0;
 
   while (1)
   {
+    if(offVoltage != 0 && !disableOutputState && voltage <= offVoltage)
+    {
+      buzzer.Long();
+      disableOutputState = true;
+      updateValues = true;
+      DisableOutput(true);
+    }
+
     if(statusMillis - millis() > STATUS_INTERVAL)
     {
       CheckLimits();
@@ -355,7 +367,7 @@ void Menu_Baterry()
     }
 
     ControlLoop();
-    EncoderLoop();
+    EncoderLoop(true);
     FanControl();
 
     if(enableBtnClick)
@@ -363,6 +375,9 @@ void Menu_Baterry()
       enableBtnClick = false;
       DisableOutput(disableOutputState = !disableOutputState);
       startTime = currentTime;
+      
+      if(!disableOutputState)
+        capacity = 0;
     }
 
     if(encBtnLongPress)
@@ -380,18 +395,18 @@ void Menu_Baterry()
       GetVoltage(voltageBuffer);
       GetCurrent(currentBuffer);
       GetPower(powerBuffer);
+      GetOffVoltage(offVoltageBuffer);
 
       lcd.setCursor(0, 0);
-      lcd.write(voltageBuffer);
+      lcd.print(String(voltageBuffer) + "   " + String(currentBuffer) + "  " + String(powerBuffer));
       lcd.setCursor(0, 1);
-      lcd.write(currentBuffer);
-      lcd.setCursor(0, 2);
-      lcd.write(powerBuffer);
+      lcd.write(capacityBuffer);
       lcd.setCursor(0, 3);
       lcd.print(GetAverageTemp());
-      lcd.print("  30531mAh");
+      lcd.setCursor(10, 3);
+      lcd.write(offVoltageBuffer);
 
-      lcd.setCursor(12, 0);
+      lcd.setCursor(0, 2);
       lcd.print(GetTime());
 
       lcd.setCursor(12, 1);
@@ -412,6 +427,12 @@ void Menu_Baterry()
       updateValues = true;
       updateTime = millis();
     }
+
+    if(!disableOutputState && millis() - updateTimeCapacity >= UPDATE_CAPACITY)
+    {
+      GetCapacity(capacityBuffer);
+      updateTimeCapacity = millis();
+    }
   }
 }
 
@@ -426,7 +447,7 @@ void Menu_Setup()
   while (1)
   {
     ControlLoop();
-    EncoderLoop();
+    EncoderLoop(false);
 
     if(encBtnLongPress)
     {
@@ -447,8 +468,7 @@ void GetVoltage(char* buffer)
     voltage = 0;
 
   dtostrf(voltage, 4, 1, buffer);
-  strcat(buffer, "V ");
-  //return String(voltage).substring(0, 4) + "V  ";
+  strcat(buffer, "V");
 }
 
 void GetCurrent(char* buffer)
@@ -460,16 +480,20 @@ void GetCurrent(char* buffer)
     current = 0;
 
   dtostrf(current, 4, 1, buffer);
-  strcat(buffer, "A ");
-  //return String(current).substring(0, 4) + "A  ";
+  strcat(buffer, "A");
 }
 
 void GetPower(char* buffer)
 {
   power = voltage * current;
-  dtostrf(power, 4, 1, buffer);
-  strcat(buffer, "W ");
-  //return String(power) + "W  ";
+  dtostrf(power, 4, 0, buffer);
+  strcat(buffer, "W");
+}
+
+void GetOffVoltage(char* buffer)
+{
+  dtostrf(offVoltage, 4, 1, buffer);
+  strcat(buffer, "V");
 }
 
 String GetAverageTemp()
@@ -500,10 +524,11 @@ String ElapsedTime()
   return timeElapsedBuffer;
 }
 
-String GetCapacity()
+void GetCapacity(char* buffer)
 {
-  //capacity = current * rtc.now();
-  return String(capacity);
+  capacity += current / 3.6;
+  dtostrf(capacity, 5, 0, buffer);
+  strcat(buffer, "mAh");
 }
 
 void DisableOutput(bool en)
@@ -514,7 +539,7 @@ void DisableOutput(bool en)
 
 void FanControl()   // 0 - 65535
 {
-  if(temp1 < 30 || temp2 < 30)
+  if(temp1 < 30 && temp2 < 30)
   {
     FanPWM(0);
     fanPercentPower = 0;
@@ -590,21 +615,34 @@ void LCDInit()
   delay(500);
 }
 
-void EncoderLoop()
+void EncoderLoop(bool values)
 {
   long newPos = encoder.encoderPos;
   if(newPos != encPos)
   {
-    if(newPos < 1)
+    if(!values)
     {
-      newPos = 3;
-      encoder.encoderPos = 3;
-    }
+      if(newPos < 1)
+      {
+        newPos = 3;
+        encoder.encoderPos = 3;
+      }
 
-    if(newPos > 3)
+      if(newPos > 3)
+      {
+        newPos = 1;
+        encoder.encoderPos = 1;
+      }
+    }
+    else
     {
-      newPos = 1;
-      encoder.encoderPos = 1;
+      if(newPos <= 0)
+      {
+        newPos = 0;
+        encoder.encoderPos = 0;
+      }
+
+      offVoltage = (float)newPos * 0.1;
     }
 
     buzzer.Short();
