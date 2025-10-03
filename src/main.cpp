@@ -1,6 +1,6 @@
 //##############################//
 //      STM Electronic Load     //
-//          Version 1.4         //
+//          Version 1.5         //
 //            By Paul           //
 //##############################//
 
@@ -20,6 +20,11 @@
 //  - Rewrite encoder library
 //  - Added Menu Main for select functions
 //  - Added Battery Load mode
+//  1.5
+//  - Added Setup Menu
+//  - Prepare calibration menu
+//  - Voltage calibration
+//  - Current Calibration
 
 #include <Arduino.h>
 #include <Adafruit_ADS1X15.h>
@@ -88,6 +93,9 @@ enum MenuType
   MENU_LOAD,
   MENU_BATERRY,
   MENU_SETUP,
+  MENU_VOLTAGE_CALIBRATION,
+  MENU_CURRENT_CALIBRATION,
+  MENU_TIME,
   MENU_NULL
 };
 
@@ -97,6 +105,9 @@ void Menu_Main(void);
 void Menu_Load(void);
 void Menu_Baterry(void);
 void Menu_Setup(void);
+void Menu_Voltage_Calibration(void);
+void Menu_Current_Calibration(void);
+void Menu_Time(void);
 
 void DoPointerNavigation(void);
 void CaptureButtonDownStates(void);
@@ -118,6 +129,20 @@ bool enableBtnClick = false, encBtnClick = false, enableBtnLongPress = false, en
 bool updateValues = true, disableOutputState = true, updateMenu = true;
 
 unsigned long updateTime = 0, fanPwmChangeMillis = 0, statusMillis = 0, updateTimeCapacity = 0;
+
+//=======================================================================//
+//                           CALIBRATION DATA                            //
+//=======================================================================//
+
+float voltageLSB = 0.003125;
+float voltageOffset = 0.08;
+
+float currentLSB = 0.003125;
+float currentOffset = 0.202;
+
+//=======================================================================//
+//                                 VOID                                  //
+//=======================================================================//
 
 void GetVoltage(char* buffer);
 void GetCurrent(char* buffer);
@@ -183,6 +208,15 @@ void loop()
     case MENU_SETUP:
       Menu_Setup();
       break;
+    case MENU_VOLTAGE_CALIBRATION:
+      Menu_Voltage_Calibration();
+      break;
+    case MENU_CURRENT_CALIBRATION:
+      Menu_Current_Calibration();
+      break;
+    case MENU_TIME:
+      Menu_Time();
+      break;
     default:
       break;
   }
@@ -195,6 +229,7 @@ void loop()
 void Menu_Main()
 {
   lcd.clear();
+  updateMenu = true;
 
   while (1)
   {
@@ -386,6 +421,7 @@ void Menu_Baterry()
       currMenu = MENU_MAIN;
       disableOutputState = true;
       updateMenu = true;
+      encoder.encoderPos = 2;
       DisableOutput(true);
       return;
     }
@@ -443,26 +479,195 @@ void Menu_Baterry()
 void Menu_Setup()
 {
   lcd.clear();
+  updateMenu = true;
+  encoder.encoderPos = 1;
 
   while (1)
   {
     ControlLoop();
     EncoderLoop(false);
 
+    if(currMenuPos != encPos)
+    {
+      currMenuPos = encPos;
+      updateMenu = true;
+    } 
+
+    if(updateMenu)
+    {
+      updateMenu = false;
+      lcd.clear();
+      lcd.setCursor(1, 0);
+      lcd.print("Voltage Calibration");
+      lcd.setCursor(1, 1);
+      lcd.print("Current Calibration");
+      lcd.setCursor(1, 2);
+      lcd.print("Back");
+
+      switch (currMenuPos)
+      {
+        case 1:
+          lcd.setCursor(0, 0);
+          lcd.write(0);
+          break;
+        case 2:
+          lcd.setCursor(0, 1);
+          lcd.write(0);
+          break;
+        case 3:
+          lcd.setCursor(0, 2);
+          lcd.write(0);
+          break;
+      
+      default:
+        break;
+      }
+    }
+
+    if(encBtnClick)
+    {
+      encBtnClick = false;
+      switch (currMenuPos)
+      {
+        case 1:
+          currMenu = MENU_VOLTAGE_CALIBRATION;
+          return;
+        case 2:
+          currMenu = MENU_CURRENT_CALIBRATION;
+          return;
+        case 3:
+          currMenu = MENU_MAIN;
+          return;
+      
+        default:
+          return;
+      }
+    }
+
     if(encBtnLongPress)
     {
       encBtnLongPress = false;
-      currMenu = MENU_MAIN;
-      updateMenu = true;
-      return;
     }
   } 
+}
+
+//=======================================================================//
+//                          VOLTAGE CALIBRATION                          //
+//=======================================================================//
+
+void Menu_Voltage_Calibration()
+{
+  lcd.clear();
+  updateMenu = true;
+
+  while (1)
+  {
+    ControlLoop();
+    
+    if(encBtnLongPress)
+    {
+      encBtnLongPress = false;
+      currMenu = MENU_SETUP;
+      return;
+    }
+
+    if(updateValues)
+    {
+      updateValues = false;
+
+      int16_t val = ads.readADC_SingleEnded(3);
+      float val1 = val * voltageLSB;
+      float val2 = val1 * voltageOffset;
+      float val3 = val1 - val2;
+      char buffer[10];
+      dtostrf(voltageLSB, 1, 6, buffer);
+      lcd.setCursor(0, 0);
+      lcd.print("ADC Input: " + String(val) + " ");
+      lcd.setCursor(0, 1);
+      lcd.print("Value: " + String(val1) + " ");
+      lcd.setCursor(0, 2);
+      lcd.print("LSB: " + String(buffer));
+      lcd.setCursor(0, 3);
+      lcd.print("Offset: " + String(voltageOffset));
+    }
+
+    if(millis() - updateTime >= 200)
+    {
+      updateValues = true;
+      updateTime = millis();
+    }
+  } 
+}
+
+//=======================================================================//
+//                          CURRENT CALIBRATION                          //
+//=======================================================================//
+
+void Menu_Current_Calibration()
+{
+  lcd.clear();
+  updateMenu = true;
+  DisableOutput(false);
+
+  while (1)
+  {
+    ControlLoop();
+    
+    if(encBtnLongPress)
+    {
+      encBtnLongPress = false;
+      currMenu = MENU_SETUP;
+      DisableOutput(true);
+      return;
+    }
+
+    if(updateValues)
+    {
+      updateValues = false;
+
+      int16_t val = ads.readADC_SingleEnded(2);
+      float val1 = (float)val / currentOffset;
+      float val2 = val1 / 1000;
+      char buffer[10];
+      dtostrf(currentOffset, 1, 3, buffer);
+      lcd.setCursor(0, 0);
+      lcd.print("ADC Input: " + String(val) + " ");
+      lcd.setCursor(0, 1);
+      lcd.print("Value: " + String(val1) + " ");
+      lcd.setCursor(0, 2);
+      lcd.print("Current: " + String(val2));
+      lcd.setCursor(0, 3);
+      lcd.print("Offset: " + String(buffer));
+    }
+
+    if(millis() - updateTime >= 200)
+    {
+      updateValues = true;
+      updateTime = millis();
+    }
+  } 
+}
+
+//=======================================================================//
+//                                  TIME                                 //
+//=======================================================================//
+
+void Menu_Time()
+{
+  lcd.clear();
+
+  while (1)
+  {
+
+  }
 }
 
 void GetVoltage(char* buffer)
 {
   int16_t val = ads.readADC_SingleEnded(3);
-  voltage = ((val * 0.03125) / 10) * 0.92592592592592592592592592592593;
+  float val1 = val * voltageLSB;
+  float val2 = val1 * voltageOffset;
+  voltage = val1 - val2;
 
   if(voltage < 0)
     voltage = 0;
@@ -474,7 +679,8 @@ void GetVoltage(char* buffer)
 void GetCurrent(char* buffer)
 {
   int16_t val = ads.readADC_SingleEnded(2);
-  current = (val * 0.03125) / 6.72;
+  float val1 = (float)val / currentOffset;
+  current = val1 / 1000;
 
   if(current < 0)
     current = 0;
@@ -611,7 +817,7 @@ void LCDInit()
   lcd.setCursor(0, 1);
   lcd.print("  Electronic Load   ");
   lcd.setCursor(0, 2);
-  lcd.print("        v1.4        ");
+  lcd.print("        v1.5        ");
   delay(500);
 }
 
