@@ -1,6 +1,6 @@
 //##############################//
 //      STM Electronic Load     //
-//          Version 1.5         //
+//          Version 1.6         //
 //            By Paul           //
 //##############################//
 
@@ -25,6 +25,9 @@
 //  - Prepare calibration menu
 //  - Voltage calibration
 //  - Current Calibration
+//  1.6
+//  - Added small voltage range <10V
+//  - Added small current range <1A
 
 #include <Arduino.h>
 #include <Adafruit_ADS1X15.h>
@@ -36,6 +39,7 @@
 #include <Encoder.h>
 #include <FanControl.h>
 
+#define VERSION                 "         1.6        "
 #define UPDATE_CAPACITY         1000
 #define UPDATE_VALUES           350
 #define STATUS_INTERVAL         3000
@@ -434,7 +438,7 @@ void Menu_Baterry()
       GetOffVoltage(offVoltageBuffer);
 
       lcd.setCursor(0, 0);
-      lcd.print(String(voltageBuffer) + "   " + String(currentBuffer) + "  " + String(powerBuffer));
+      lcd.print(String(voltageBuffer) + "  " + String(currentBuffer) + " " + String(powerBuffer));
       lcd.setCursor(0, 1);
       lcd.write(capacityBuffer);
       lcd.setCursor(0, 3);
@@ -662,6 +666,10 @@ void Menu_Time()
   }
 }
 
+//=======================================================================//
+//                                 OTHER                                 //
+//=======================================================================//
+
 void GetVoltage(char* buffer)
 {
   int16_t val = ads.readADC_SingleEnded(3);
@@ -672,8 +680,8 @@ void GetVoltage(char* buffer)
   if(voltage < 0)
     voltage = 0;
 
-  dtostrf(voltage, 4, 1, buffer);
-  strcat(buffer, "V");
+  voltage <= 10 ? dtostrf(voltage, 4, 2, buffer) : dtostrf(voltage, 4, 1, buffer);
+  strcat(buffer, "V ");
 }
 
 void GetCurrent(char* buffer)
@@ -685,8 +693,8 @@ void GetCurrent(char* buffer)
   if(current < 0)
     current = 0;
 
-  dtostrf(current, 4, 1, buffer);
-  strcat(buffer, "A");
+  current <= 1 ? dtostrf(current, 4, 2, buffer) : dtostrf(current, 4, 1, buffer);
+  strcat(buffer, "A ");
 }
 
 void GetPower(char* buffer)
@@ -815,9 +823,9 @@ void LCDInit()
   lcd.createChar(0, bitmap_arrow);
   lcd.clear();
   lcd.setCursor(0, 1);
-  lcd.print("  Electronic Load   ");
+  lcd.print("Electronic Load 500W");
   lcd.setCursor(0, 2);
-  lcd.print("        v1.5        ");
+  lcd.print(VERSION);
   delay(500);
 }
 
