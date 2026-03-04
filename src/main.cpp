@@ -1,6 +1,6 @@
 //##############################//
 //      STM Electronic Load     //
-//          Version 1.6         //
+//          Version 1.8         //
 //            By Paul           //
 //##############################//
 
@@ -28,6 +28,14 @@
 //  1.6
 //  - Added small voltage range <10V
 //  - Added small current range <1A
+//  1.7
+//  - Added setup time option
+//  1.8
+//  - Recalibration
+//  - Fan 100% while power is >= 300W
+//  - Change limits
+//  - Fixed cursor in setup menu
+//  - Open last menu while limits exceed
 
 #include <Arduino.h>
 #include <Adafruit_ADS1X15.h>
@@ -39,13 +47,13 @@
 #include <Encoder.h>
 #include <FanControl.h>
 
-#define VERSION                 "         1.6        "
+#define VERSION                 "         1.8        "
 #define UPDATE_CAPACITY         1000
 #define UPDATE_VALUES           350
 #define STATUS_INTERVAL         3000
 #define VOLTAGE_MAX_LIMIT       99
 #define CURRENT_MAX_LIMIT       50
-#define POWER_MAX_LIMIT         500
+#define POWER_MAX_LIMIT         550
 #define TEMPERATURE_MAX_LIMIT   60
 
 //=======================================================================//
@@ -104,6 +112,7 @@ enum MenuType
 };
 
 enum MenuType currMenu = MENU_LOAD;
+enum MenuType lastMenu = MENU_NULL;
 
 void Menu_Main(void);
 void Menu_Load(void);
@@ -142,7 +151,7 @@ float voltageLSB = 0.003125;
 float voltageOffset = 0.08;
 
 float currentLSB = 0.003125;
-float currentOffset = 0.202;
+float currentOffset = 0.22;
 
 //=======================================================================//
 //                                 VOID                                  //
@@ -168,8 +177,9 @@ void EncButtonClick(void);
 void EnableButtonLongPress(void);
 void EncButtonLongPress(void);
 void ControlLoop(void);
-void EncoderLoop(bool values);
+void EncoderLoop(bool values, uint8_t maxPos);
 void CheckLimits(void);
+void LimitsALL_OFF(void);
 uint16_t mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
 
 void setup()
@@ -234,11 +244,12 @@ void Menu_Main()
 {
   lcd.clear();
   updateMenu = true;
+  lastMenu = MENU_MAIN;
 
   while (1)
   {
     ControlLoop();
-    EncoderLoop(false);
+    EncoderLoop(false, 3);
 
     if(currMenuPos != encPos)
     {
@@ -312,6 +323,7 @@ void Menu_Load()
 {
   lcd.clear();
   encoder.encoderPos = 1;
+  lastMenu = MENU_LOAD;
 
   while (1)
   {
@@ -388,6 +400,7 @@ void Menu_Baterry()
 {
   lcd.clear();
   encoder.encoderPos = 0;
+  lastMenu = MENU_BATERRY;
 
   while (1)
   {
@@ -406,7 +419,7 @@ void Menu_Baterry()
     }
 
     ControlLoop();
-    EncoderLoop(true);
+    EncoderLoop(true, 3);
     FanControl();
 
     if(enableBtnClick)
@@ -485,11 +498,12 @@ void Menu_Setup()
   lcd.clear();
   updateMenu = true;
   encoder.encoderPos = 1;
+  lastMenu = MENU_SETUP;
 
   while (1)
   {
     ControlLoop();
-    EncoderLoop(false);
+    EncoderLoop(false, 4);
 
     if(currMenuPos != encPos)
     {
@@ -506,6 +520,8 @@ void Menu_Setup()
       lcd.setCursor(1, 1);
       lcd.print("Current Calibration");
       lcd.setCursor(1, 2);
+      lcd.print("Time");
+      lcd.setCursor(1, 3);
       lcd.print("Back");
 
       switch (currMenuPos)
@@ -520,6 +536,10 @@ void Menu_Setup()
           break;
         case 3:
           lcd.setCursor(0, 2);
+          lcd.write(0);
+          break;
+        case 4:
+          lcd.setCursor(0, 3);
           lcd.write(0);
           break;
       
@@ -540,7 +560,12 @@ void Menu_Setup()
           currMenu = MENU_CURRENT_CALIBRATION;
           return;
         case 3:
+          currMenu = MENU_TIME;
+          return;
+        case 4:
           currMenu = MENU_MAIN;
+          currMenuPos = 3;
+          encoder.encoderPos = 3;
           return;
       
         default:
@@ -563,6 +588,7 @@ void Menu_Voltage_Calibration()
 {
   lcd.clear();
   updateMenu = true;
+  lastMenu = MENU_VOLTAGE_CALIBRATION;
 
   while (1)
   {
@@ -612,6 +638,7 @@ void Menu_Current_Calibration()
   lcd.clear();
   updateMenu = true;
   DisableOutput(false);
+  lastMenu = MENU_CURRENT_CALIBRATION;
 
   while (1)
   {
@@ -659,10 +686,11 @@ void Menu_Current_Calibration()
 void Menu_Time()
 {
   lcd.clear();
+  lastMenu = MENU_TIME;
 
   while (1)
   {
-
+    ControlLoop();
   }
 }
 
@@ -753,6 +781,14 @@ void DisableOutput(bool en)
 
 void FanControl()   // 0 - 65535
 {
+  if(power >= 300)  // Space Shuttle Start
+  {
+    fanSetPwm = 65535;
+    fanPercentPower = 100;
+    FanPWM(fanSetPwm);
+    return;
+  }
+
   if(temp1 < 30 && temp2 < 30)
   {
     FanPWM(0);
@@ -829,7 +865,7 @@ void LCDInit()
   delay(500);
 }
 
-void EncoderLoop(bool values)
+void EncoderLoop(bool values, uint8_t maxPos)
 {
   long newPos = encoder.encoderPos;
   if(newPos != encPos)
@@ -838,11 +874,11 @@ void EncoderLoop(bool values)
     {
       if(newPos < 1)
       {
-        newPos = 3;
-        encoder.encoderPos = 3;
+        newPos = maxPos;
+        encoder.encoderPos = maxPos;
       }
 
-      if(newPos > 3)
+      if(newPos > maxPos)
       {
         newPos = 1;
         encoder.encoderPos = 1;
@@ -925,7 +961,7 @@ void CheckLimits()
       currentStatus = NORMAL_STATUS;
       digitalWrite(LED_FAULT, 0);
       digitalWrite(BUZZER_PIN, 0);
-      currMenu = MENU_MAIN;
+      currMenu = lastMenu;
       lcd.clear();
       return;
     }
@@ -936,31 +972,31 @@ void CheckLimits()
         break;
       case  VOLTAGE_LIMIT:
         lcd.print("INPUT VOLTAGE LIMIT!");
-        digitalWrite(BUZZER_PIN, 1);
-        DisableOutput(true);
-        disableOutputState = true;
+        LimitsALL_OFF();
         break;
       case  CURRENT_LIMIT:
         lcd.print("INPUT CURRENT LIMIT!");
-        digitalWrite(BUZZER_PIN, 1);
-        DisableOutput(true);
-        disableOutputState = true;
+        LimitsALL_OFF();
         break;
       case  POWER_LIMIT:
         lcd.print("INPUT POWER LIMIT! ");
-        digitalWrite(BUZZER_PIN, 1);
-        DisableOutput(true);
-        disableOutputState = true;
+        LimitsALL_OFF();
         break;
       case  TEMPERATURE_LIMIT:
         lcd.print("INPUT TEMPERATURE! ");
-        digitalWrite(BUZZER_PIN, 1);
-        DisableOutput(true);
-        disableOutputState = true;
-        analogWrite(FAN_PWM, 255);
+        LimitsALL_OFF();
         break;
       case  SELF_TEST_ERROR:
         break;  
     }
   }
+}
+
+void LimitsALL_OFF()
+{
+  digitalWrite(BUZZER_PIN, 1);
+  DisableOutput(true);
+  disableOutputState = true;
+  FanPWM(65535);
+  fanPercentPower = 100;
 }
